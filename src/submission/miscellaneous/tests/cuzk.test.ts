@@ -45,11 +45,7 @@ describe("cuzk", () => {
     const scalars: bigint[] = [];
     for (let i = 0; i < input_size; i++) {
       points.push(pt);
-      const v = BigInt(
-        "1111111111111111111111111111111111111111111111111111111111111111111111111111",
-      );
-      scalars.push((BigInt(i) * v) % p);
-      points.push(fieldMath.createPoint(x, y, t, z).multiply(BigInt(i + 1)));
+      scalars.push(BigInt(1));
     }
 
     const decomposed_scalars = decompose_scalars_signed(

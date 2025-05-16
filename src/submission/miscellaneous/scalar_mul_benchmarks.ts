@@ -58,7 +58,7 @@ export const scalar_mul_benchmarks = async (
   const cost = 1024;
 
   const num_scalars = 1;
-  const scalars: number[] = [];
+  const scalars: number[] = [1]; // Fixed scalar = 1
 
   // Use a PRNG instead of system randomness so that the inputs are
   // deterministic

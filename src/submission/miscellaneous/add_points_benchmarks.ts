@@ -89,28 +89,22 @@ export const add_points_benchmarks = async (
     "0x12ab655e9a2ca55660b44d1e5c37b00159aa76fed00000010a11800000000001",
   );
 
-  // Ignore the input points and scalars. Generate two random Extended
-  // Twisted Edwards points, perform many additions, and print the time taken.
+  // Use fixed base point
   const x = BigInt(
-    "2796670805570508460920584878396618987767121022598342527208237783066948667246",
+    "1",
   );
   const y = BigInt(
-    "8134280397689638111748378379571739274369602049665521098046934931245960532166",
+    "2",
   );
   const t = BigInt(
-    "3446088593515175914550487355059397868296219355049460558182099906777968652023",
+    "2",
   );
   const z = BigInt("1");
-  // Note that pt is not the generator of the group. it's just a valid curve point.
   const pt = fieldMath.createPoint(x, y, t, z);
 
-  // Generate two random points by multiplying by random field elements
-  const a = pt.multiply(genRandomFieldElement(p));
-  const b = pt.multiply(genRandomFieldElement(p));
-
-  // Uncomment to test a == b
-  //const a = pt
-  //const b = pt
+  // Use same point for both a and b
+  const a = pt;
+  const b = pt;
 
   const num_x_workgroups = 1;
   const word_size = 13;

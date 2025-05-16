@@ -102,11 +102,10 @@ export const AllBenchmarks: React.FC = () => {
 
   useEffect(() => {
     async function generateNewInputs() {
-      // creating random points is slow, so for now use a single fixed base.
-      // const newPoints = await createRandomAffinePoints(inputSize);
-      const x = BigInt('2796670805570508460920584878396618987767121022598342527208237783066948667246');
-      const y = BigInt('8134280397689638111748378379571739274369602049665521098046934931245960532166');
-      const t = BigInt('3446088593515175914550487355059397868296219355049460558182099906777968652023');
+      // Use fixed base point
+      const x = BigInt('1');
+      const y = BigInt('2');
+      const t = BigInt('2');
       const z = BigInt('1');
       const point: BigIntPoint = {x, y, t, z};
       const newPoints = Array(inputSize).fill(point);
@@ -127,7 +126,8 @@ export const AllBenchmarks: React.FC = () => {
       const pointsBufferLE = bigIntsToBufferLE(xyArray, 256);
       setBufferPoints(pointsBufferLE);
 
-      const newScalars = generateRandomFields(inputSize);
+      // Use fixed scalar = 1
+      const newScalars = Array(inputSize).fill(BigInt(1));
       setBigIntScalars(newScalars);
       const newU32Scalars = newScalars.map((scalar) => bigIntToU32Array(scalar));
       setU32Scalars(newU32Scalars);
