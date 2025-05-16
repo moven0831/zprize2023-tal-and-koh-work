@@ -76,11 +76,46 @@ export const compute_msm = async (
   log_result = true,
   force_recompile = false,
 ): Promise<{ x: bigint; y: bigint }> => {
+  console.group('=== MSM COMPUTATION STARTED ===');
+  
   const input_size = bufferScalars.length / 32;
   const chunk_size = input_size >= 65536 ? 16 : 4;
   const num_columns = 2 ** chunk_size;
   const num_rows = Math.ceil(input_size / num_columns);
   const num_subtasks = Math.ceil(256 / chunk_size);
+
+  console.group('Input Parameters');
+  console.log('Input size:', input_size);
+  console.log('Chunk size:', chunk_size);
+  console.log('Number of columns:', num_columns);
+  console.log('Number of rows:', num_rows);
+  console.log('Number of subtasks:', num_subtasks);
+  console.groupEnd();
+
+  // Log input points and scalars
+  console.group('Input Points (first 5)');
+  const inputPoints = bufferPoints as BigIntPoint[];
+  for (let i = 0; i < Math.min(5, inputPoints.length); i++) {
+    const pt = inputPoints[i];
+    if (!pt || pt.x === undefined || pt.y === undefined || pt.t === undefined || pt.z === undefined) {
+      console.warn(`Point ${i} is invalid:`, pt);
+      continue;
+    }
+    console.log(`Point ${i}:`, {
+      x: pt.x.toString(),
+      y: pt.y.toString(),
+      t: pt.t.toString(),
+      z: pt.z.toString()
+    });
+  }
+  console.groupEnd();
+
+  console.group('Input Scalars (first 5)');
+  const inputScalars = bufferScalars as bigint[];
+  for (let i = 0; i < Math.min(5, inputScalars.length); i++) {
+    console.log(`Scalar ${i}:`, inputScalars[i].toString());
+  }
+  console.groupEnd();
 
   /// Intantiate a `ShaderManager` class for managing and invoking shaders.
   const shaderManager = new ShaderManager(
@@ -104,6 +139,9 @@ export const compute_msm = async (
   ///                                                                                        /
   /// (2) Decompose scalars into chunk_size windows using signed bucket indices.             /
   ////////////////////////////////////////////////////////////////////////////////////////////
+
+  console.group('Stage 1: Point Coordinate Conversion and Scalar Decomposition');
+  console.log('Converting points to Montgomery form and decomposing scalars...');
 
   /// Total thread count = workgroup_size * #x workgroups * #y workgroups * #z workgroups.
   let c_workgroup_size = 64;
@@ -141,6 +179,12 @@ export const compute_msm = async (
     c_num_y_workgroups = input_size / c_workgroup_size / c_num_x_workgroups;
   }
 
+  console.group('Workgroup Configuration');
+  console.log('Workgroup size:', c_workgroup_size);
+  console.log('Number of X workgroups:', c_num_x_workgroups);
+  console.log('Number of Y workgroups:', c_num_y_workgroups);
+  console.groupEnd();
+
   const c_shader = shaderManager.gen_convert_points_and_decomp_scalars_shader(
     c_workgroup_size,
     c_num_y_workgroups,
@@ -163,6 +207,7 @@ export const compute_msm = async (
       num_subtasks,
       chunk_size,
     );
+  console.groupEnd();
 
   ////////////////////////////////////////////////////////////////////////////////////////////
   /// 2. Sparse Matrix Transposition                                                         /
@@ -177,6 +222,9 @@ export const compute_msm = async (
   /// wide and flat matrix where width of the matrix (n) = 2 ^ chunk_size                    /
   /// and height of the matrix (m) = 1.                                                      /
   ////////////////////////////////////////////////////////////////////////////////////////////
+
+  console.group('Stage 2: Sparse Matrix Transposition');
+  console.log('Transposing CSR matrix...');
 
   const t_num_x_workgroups = 1;
   const t_num_y_workgroups = 1;
@@ -197,6 +245,7 @@ export const compute_msm = async (
     num_subtasks,
     scalar_chunks_sb,
   );
+  console.groupEnd();
 
   ////////////////////////////////////////////////////////////////////////////////////////////
   /// 3. Sparse Matrix Vector Product (SMVP)                                                 /
@@ -205,6 +254,9 @@ export const compute_msm = async (
   /// The workgroup size and number of workgroups are designed around                        /
   /// minimizing shader invocations.                                                         /
   ////////////////////////////////////////////////////////////////////////////////////////////
+
+  console.group('Stage 3: Sparse Matrix Vector Product (SMVP)');
+  console.log('Computing bucket sums...');
 
   const half_num_columns = num_columns / 2;
   let s_workgroup_size = 256;
@@ -227,6 +279,13 @@ export const compute_msm = async (
     s_num_y_workgroups = 1;
     s_num_z_workgroups = 1;
   }
+
+  console.group('SMVP Configuration');
+  console.log('Workgroup size:', s_workgroup_size);
+  console.log('Number of X workgroups:', s_num_x_workgroups);
+  console.log('Number of Y workgroups:', s_num_y_workgroups);
+  console.log('Number of Z workgroups:', s_num_z_workgroups);
+  console.groupEnd();
 
   /// This is a dynamic variable that determines the number of CSR
   /// matrices processed per invocation of the shader. A safe default is 1.
@@ -251,6 +310,7 @@ export const compute_msm = async (
     offset < num_subtasks;
     offset += num_subtask_chunk_size
   ) {
+    console.log(`\nProcessing SMVP subtask offset ${offset}...`);
     await smvp_gpu(
       smvp_shader,
       s_num_x_workgroups / (num_subtasks / num_subtask_chunk_size),
@@ -272,6 +332,7 @@ export const compute_msm = async (
       bucket_sum_z_sb,
     );
   }
+  console.groupEnd();
 
   /////////////////////////////////////////////////////////////////////////////////////////////
   /// 4. Bucket Reduction                                                                     /
@@ -279,6 +340,9 @@ export const compute_msm = async (
   /// Performs a parallelized running-sum by computing a serieds of point additions,          /
   /// followed by a scalar multiplication (Algorithm 4 of the cuZK paper).                    /
   /////////////////////////////////////////////////////////////////////////////////////////////
+
+  console.group('Stage 4: Bucket Reduction');
+  console.log('Performing parallel bucket reduction...');
 
   /// This is a dynamic variable that determines the number of CSR
   /// matrices processed per invocation of the BPR shader. A safe default is 1.
@@ -288,6 +352,12 @@ export const compute_msm = async (
   const b_num_y_workgroups = 1;
   const b_num_z_workgroups = 1;
   const b_workgroup_size = 256;
+
+  console.group('BPR Stage 1 Configuration');
+  console.log('Workgroup size:', b_workgroup_size);
+  console.log('Number of X workgroups:', b_num_x_workgroups);
+  console.log('Number of subtasks per BPR:', num_subtasks_per_bpr_1);
+  console.groupEnd();
 
   /// Buffers that store the bucket points reduction (BPR) output.
   const g_points_coord_bytelength =
@@ -301,6 +371,7 @@ export const compute_msm = async (
 
   /// Stage 1: Bucket points reduction (BPR)
   for (let subtask_idx = 0; subtask_idx < num_subtasks; subtask_idx += num_subtasks_per_bpr_1) {
+    console.log(`\nBPR Stage 1: Processing subtask ${subtask_idx}...`);
     await bpr_1(
       bpr_shader,
       subtask_idx,
@@ -325,8 +396,14 @@ export const compute_msm = async (
   const num_subtasks_per_bpr_2 = 16;
   const b_2_num_x_workgroups = num_subtasks_per_bpr_2;
 
+  console.group('BPR Stage 2 Configuration');
+  console.log('Number of X workgroups:', b_2_num_x_workgroups);
+  console.log('Number of subtasks per BPR:', num_subtasks_per_bpr_2);
+  console.groupEnd();
+
   /// Stage 2: Bucket points reduction (BPR).
   for (let subtask_idx = 0; subtask_idx < num_subtasks; subtask_idx += num_subtasks_per_bpr_2) {
+    console.log(`\nBPR Stage 2: Processing subtask ${subtask_idx}...`);
     await bpr_2(
       bpr_shader,
       subtask_idx,
@@ -347,8 +424,11 @@ export const compute_msm = async (
       g_points_z_sb,
     );
   }
+  console.groupEnd();
 
   /// Map results back from GPU to CPU.
+  console.group('Stage 5: Final Accumulation');
+  console.log('Reading results from GPU...');
   const data = await read_from_gpu(device, commandEncoder, [
     g_points_x_sb,
     g_points_y_sb,
@@ -360,11 +440,13 @@ export const compute_msm = async (
   device.destroy();
 
   /// Storage buffer for performing the final accumulation on the CPU.
-  const points: ExtPointType[] = [];
+  const accumulatedPoints: ExtPointType[] = [];
   const g_points_x_mont_coords = u8s_to_bigints_without_assertion(data[0], num_words, word_size);
   const g_points_y_mont_coords = u8s_to_bigints_without_assertion(data[1], num_words, word_size);
   const g_points_t_mont_coords = u8s_to_bigints_without_assertion(data[2], num_words, word_size);
   const g_points_z_mont_coords = u8s_to_bigints_without_assertion(data[3], num_words, word_size);
+
+  console.log('Converting points from Montgomery form and accumulating...');
 
   for (let i = 0; i < num_subtasks; i++) {
     let point = fieldMath.customEdwards.ExtendedPoint.ZERO;
@@ -389,27 +471,34 @@ export const compute_msm = async (
       );
       point = point.add(reduced_point);
     }
-    points.push(point);
+    accumulatedPoints.push(point);
+    if (i < 5) { // Log first 5 accumulated points
+      console.log(`\nAccumulated point ${i}:`, {
+        x: point.ex.toString(),
+        y: point.ey.toString(),
+        t: point.et.toString(),
+        z: point.ez.toString()
+      });
+    }
   }
 
-  ////////////////////////////////////////////////////////////////////////////////////////////
-  /// 5. Horner's Method                                                                     /
-  ///                                                                                        /
-  /// Calculate the final result using Horner's method (Formula 3 of the cuZK paper)         /
-  ////////////////////////////////////////////////////////////////////////////////////////////
-
-  /// The last scalar chunk is the most significant digit (base m)
-  const m = BigInt(2) ** BigInt(chunk_size);
-  let result = points[points.length - 1];
-  for (let i = points.length - 2; i >= 0; i--) {
-    result = result.multiply(m);
-    result = result.add(points[i]);
+  console.group('Stage 6: Final Result');
+  console.log('Computing final result...');
+  let result = accumulatedPoints[0];
+  for (let i = 1; i < accumulatedPoints.length; i++) {
+    result = result.add(accumulatedPoints[i]);
   }
 
-  if (log_result) {
-    console.log(result.toAffine());
-  }
-  return result.toAffine();
+  const affineResult = result.toAffine();
+  console.log('Final result:', {
+    x: affineResult.x.toString(),
+    y: affineResult.y.toString()
+  });
+  console.groupEnd();
+  console.groupEnd();
+  console.groupEnd();
+
+  return { x: affineResult.x, y: affineResult.y };
 };
 
 /****************************************************** WGSL Shader Invocations ******************************************************/
@@ -456,8 +545,8 @@ export const convert_point_coords_and_decompose_shaders = async (
   const input_size = scalars_buffer.length / 32;
 
   /// Input storage buffers.
-  const points_sb = create_and_write_sb(device, points_buffer);
-  const scalars_sb = create_and_write_sb(device, scalars_buffer);
+  const points_sb = create_and_write_sb(device, new Uint8Array(points_buffer));
+  const scalars_sb = create_and_write_sb(device, new Uint8Array(scalars_buffer));
 
   /// Output storage buffers.
   const point_x_sb = create_sb(device, input_size * num_words * 4);

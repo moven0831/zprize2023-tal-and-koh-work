@@ -56,13 +56,26 @@ export const pippinger_msm = async (
   scalars: number[], 
   fieldMath: FieldMath
   ) => {
+    console.group('=== Pippenger MSM Computation ===');
     const C = 16;
+
+    // Log input points and scalars
+    console.group('Input');
+    for (let i = 0; i < Math.min(5, points.length); i++) {
+      const pt = points[i];
+      console.log(`Point ${i}:`, { x: pt.ex.toString(), y: pt.ey.toString(), t: pt.et.toString(), z: pt.ez.toString() });
+    }
+    if (points.length > 5) console.log(`... (${points.length} total points)`);
+    for (let i = 0; i < Math.min(5, scalars.length); i++) {
+      console.log(`Scalar ${i}:`, scalars[i].toString());
+    }
+    if (scalars.length > 5) console.log(`... (${scalars.length} total scalars)`);
+    console.groupEnd();
 
     ///
     /// DICTIONARY SETUP
     ///
-    // Need to setup our 256/C MSMs (T_1, T_2, ..., T_n). We'll do this
-    // by via the bucket method for each MSM
+    console.group('Bucket Setup');
     const numMsms = 256/C;
     const msms: Map<number, ExtPointType>[] = [];
     for (let i = 0; i < numMsms; i++) {
@@ -94,9 +107,15 @@ export const pippinger_msm = async (
         }
     }
 
+    msms.forEach((msm, i) => {
+      console.log(`MSM ${i}: ${msm.size} buckets`);
+    });
+    console.groupEnd();
+
     ///
     /// GPU INPUT SETUP & COMPUTATION
     ///
+    console.group('GPU Input/Output');
     const pointsConcatenated: bigint[] = [];
     const scalarsConcatenated: number[] = [];
     for (let i = 0; i < msms.length; i++) {
@@ -106,6 +125,8 @@ export const pippinger_msm = async (
         });
         scalarsConcatenated.push(...Array.from(msms[i].keys()))
     }
+    console.log('PointsConcatenated length:', pointsConcatenated.length);
+    console.log('ScalarsConcatenated length:', scalarsConcatenated.length);
 
     // Need to consider GPU buffer and memory limits so need to chunk
     // the concatenated inputs into reasonable sizes. The ratio of points
@@ -116,6 +137,7 @@ export const pippinger_msm = async (
 
     const gpuResultsAsBigInts = [];
     for (let i = 0; i < chunkedPoints.length; i++) {
+        console.log(`GPU chunk ${i}: points=${chunkedPoints[i].length}, scalars=${chunkedScalars[i].length}`);
         const bufferResult = await point_mul(
           { u32Inputs: bigIntsToU32Array(chunkedPoints[i]), individualInputSize: EXT_POINT_SIZE }, 
           { u32Inputs: Uint32Array.from(chunkedScalars[i]), individualInputSize: FIELD_SIZE }
@@ -123,6 +145,8 @@ export const pippinger_msm = async (
         
         gpuResultsAsBigInts.push(...u32ArrayToBigInts(bufferResult || new Uint32Array(0)));
     }
+    console.log('GPU results length:', gpuResultsAsBigInts.length);
+    console.groupEnd();
 
     ///
     /// CONVERT GPU RESULTS BACK TO EXTENDED POINTS
@@ -136,10 +160,16 @@ export const pippinger_msm = async (
         const extendedPoint = fieldMath.createPoint(x, y, t, z);
         gpuResultsAsExtendedPoints.push(extendedPoint);
     }
+    for (let i = 0; i < Math.min(5, gpuResultsAsExtendedPoints.length); i++) {
+      const pt = gpuResultsAsExtendedPoints[i];
+      console.log(`GPU Result Point ${i}:`, { x: pt.ex.toString(), y: pt.ey.toString(), t: pt.et.toString(), z: pt.ez.toString() });
+    }
+    if (gpuResultsAsExtendedPoints.length > 5) console.log(`... (${gpuResultsAsExtendedPoints.length} total GPU result points)`);
 
     ///
     /// SUMMATION OF SCALAR MULTIPLICATIONS FOR EACH MSM
     ///
+    console.group('MSM Summation');
     const msmResults = [];
     const bucketing = msms.map(msm => msm.size);
     let prevBucketSum = 0;
@@ -151,20 +181,26 @@ export const pippinger_msm = async (
       msmResults.push(currentSum);
       prevBucketSum += bucket;
     }
+    for (let i = 0; i < Math.min(5, msmResults.length); i++) {
+      const pt = msmResults[i];
+      console.log(`MSM Result ${i}:`, { x: pt.ex.toString(), y: pt.ey.toString(), t: pt.et.toString(), z: pt.ez.toString() });
+    }
+    if (msmResults.length > 5) console.log(`... (${msmResults.length} MSM results)`);
+    console.groupEnd();
 
     ///
     /// SOLVE FOR ORIGINAL MSM
     ///
+    console.group('Final MSM Result');
     let originalMsmResult = msmResults[0];
     for (let i = 1; i < msmResults.length; i++) {
         originalMsmResult = originalMsmResult.multiplyUnsafe(BigInt(Math.pow(2, C)));
         originalMsmResult = originalMsmResult.add(msmResults[i]);
     }
-
-    ///
-    /// CONVERT TO AFFINE POINT FOR FINAL RESULT
-    ///
     const affineResult = originalMsmResult.toAffine();
+    console.log('Final result:', { x: affineResult.x.toString(), y: affineResult.y.toString() });
+    console.groupEnd();
+    console.groupEnd();
     return { x: affineResult.x, y: affineResult.y };
 }
 
